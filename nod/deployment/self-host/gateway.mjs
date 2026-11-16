@@ -190,10 +190,25 @@ async function form(request) {
   return Object.fromEntries(new URLSearchParams(body));
 }
 
+// Browsers state where a form came from in Sec-Fetch-Site; Origin can legitimately be "null" (privacy settings, referrer policy), so it is only the fallback.
+function sameSite(request) {
+  const site = request.headers['sec-fetch-site'];
+  if (site) return site === 'same-origin' || site === 'none';
+  if (!request.headers.origin) return true;
+  try {
+    return new URL(request.headers.origin).host === request.headers.host;
+  } catch {
+    return false;
+  }
+}
+
 async function auth(request, response, path) {
   if (request.method === 'GET' && path === '/_auth/login') return page(response, 200, '', false, new URLSearchParams(request.url.split('?')[1]).get('next'));
   if (request.method !== 'POST') return response.writeHead(404).end();
-  if (request.headers.origin && request.headers.origin !== origin) return response.writeHead(403).end();
+  if (!sameSite(request)) {
+    console.warn('Refused cross-site form post', { origin: request.headers.origin, site: request.headers['sec-fetch-site'], host: request.headers.host });
+    return response.writeHead(403, { 'Content-Type': 'text/plain' }).end('Cross-site form posts are not permitted. Reload the sign-in page and try again.');
+  }
   if (path === '/_auth/logout') return response.writeHead(303, { Location: '/_auth/login', 'Set-Cookie': cookie('', 0) }).end();
   const { username = '', password = '', invite = '', next } = await form(request);
   const sized = password.length >= 12 && password.length <= 128;
