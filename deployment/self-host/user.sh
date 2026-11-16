@@ -12,10 +12,11 @@ if [ ! -e "$env" ]; then
   # ponytail: port = 4311 + existing user count; set PORT by hand if a user is ever deleted
   port=$((4311 + $(find users -name '*.env' | wc -l)))
   {
-    # PORT must precede .env.example's NOD_PUBLIC_URL, which interpolates it
-    printf 'PORT=%s\n' "$port"
-    sed '/^COMPOSE_PROJECT_NAME=/d; /^PORT=/d; /^NOD_AUTH_TOKEN=/d; /^NOD_VAULT_KEY=/d; /^NOD_POSTGRES_PASSWORD=/d' .env.example
+    sed '/^COMPOSE_PROJECT_NAME=/d; /^PORT=/d; /^NOD_PUBLIC_URL=/d; /^NOD_AUTH_TOKEN=/d; /^NOD_VAULT_KEY=/d; /^NOD_POSTGRES_PASSWORD=/d' .env.example
     printf 'COMPOSE_PROJECT_NAME=nod-%s\n' "$name"
+    printf 'PORT=%s\n' "$port"
+    # Every user shares the gateway's origin; gateway.mjs routes by login
+    printf 'NOD_PUBLIC_URL=%s\n' "${GATEWAY_URL:-http://localhost:4300}"
     printf 'NOD_AUTH_TOKEN=%s\n' "$(openssl rand -hex 32)"
     printf 'NOD_VAULT_KEY=%s\n' "$(openssl rand -base64 32)"
     printf 'NOD_POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 32)"

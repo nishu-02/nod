@@ -1,0 +1,23 @@
+name: nod-gateway
+
+services:
+  gateway:
+    image: node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+    restart: unless-stopped
+    init: true
+    # Must own ./users on the host; set GATEWAY_UID if that is not uid 1000
+    user: '${GATEWAY_UID:-1000}'
+    command: ['node', '/app/gateway.mjs']
+    environment:
+      GATEWAY_URL: ${GATEWAY_URL:-http://localhost:4300}
+      USERS_DIR: /users
+    # Host networking reaches each user's loopback-only Nod port; the gateway itself listens on 127.0.0.1:4300
+    network_mode: host
+    volumes:
+      - ./gateway.mjs:/app/gateway.mjs:ro,Z
+      - ./users:/users:Z
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 256m
