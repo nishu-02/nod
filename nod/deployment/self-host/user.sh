@@ -9,8 +9,9 @@ case "$name" in *[!a-z0-9]*) echo 'Name must be lowercase letters and digits.' >
 env=users/$name.env
 if [ ! -e "$env" ]; then
   mkdir -p users
-  # ponytail: port = 4311 + existing user count; set PORT by hand if a user is ever deleted
-  port=$((4311 + $(find users -name '*.env' | wc -l)))
+  # One above the highest port in use, so deleting a user never causes a clash
+  last=$(sed -n 's/^PORT=//p' users/*.env 2>/dev/null | sort -n | tail -1)
+  port=$((${last:-4310} + 1))
   {
     sed '/^COMPOSE_PROJECT_NAME=/d; /^PORT=/d; /^NOD_PUBLIC_URL=/d; /^NOD_AUTH_TOKEN=/d; /^NOD_VAULT_KEY=/d; /^NOD_POSTGRES_PASSWORD=/d' .env.example
     printf 'COMPOSE_PROJECT_NAME=nod-%s\n' "$name"
