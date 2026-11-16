@@ -1,7 +1,7 @@
 // Login gateway: argon2id passwords, HS256 JWT cookie, then proxies each user to their own Nod.
 import assert from 'node:assert';
-import { argon2, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { argon2, createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import { promisify } from 'node:util';
@@ -109,7 +109,17 @@ function session(request) {
     .find((part) => part.startsWith(`${COOKIE}=`))
     ?.slice(COOKIE.length + 1);
   const user = claims(token)?.sub;
-  return accounts.has(user) ? instance(user) : undefined;
+  return accounts.has(user) ? instance(user) : bearer(request);
+}
+
+// The Nod desktop app sends its server token on every request; it skips the password, so treat that token as a secret.
+function bearer(request) {
+  const token = /^Bearer ([A-Za-z0-9_-]{43,})$/i.exec(request.headers.authorization ?? '')?.[1];
+  if (!token) return;
+  return readdirSync(dir)
+    .filter((file) => file.endsWith('.env'))
+    .map((file) => instance(file.slice(0, -4)))
+    .find((target) => target && same(token, target.token));
 }
 
 const DUMMY = await hash(randomBytes(16).toString('hex'));
@@ -117,26 +127,46 @@ const fails = new Map();
 const LOCK_AFTER = 5;
 const LOCK_MS = 15 * 60_000;
 
-const page = (response, status, message = '') =>
+const STYLE = `
+:root{color-scheme:light dark;--bg:#f6f5f3;--card:#fff;--text:#191919;--muted:#6b6b6b;--line:#dcdad6;--accent:#ff91ac;--error:#b3261e}
+@media (prefers-color-scheme:dark){:root{--bg:#191919;--card:#232323;--text:#f2f1ef;--muted:#a3a3a3;--line:#3a3a3a;--error:#ffb4ab}}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;padding:16px;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,sans-serif}
+main{width:100%;max-width:380px;padding:32px;background:var(--card);border:1px solid var(--line);border-radius:16px}
+h1{margin:0 0 4px;font-size:28px}
+h2{margin:0 0 16px;font-size:16px;font-weight:400;color:var(--muted)}
+label{display:block;margin-bottom:16px;font-size:14px;font-weight:600}
+input{display:block;width:100%;margin-top:6px;padding:10px 12px;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:8px}
+input:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button{width:100%;padding:11px;font:inherit;font-weight:600;color:#191919;background:var(--accent);border:0;border-radius:8px;cursor:pointer}
+[role=alert]{margin:0 0 16px;padding:10px 12px;font-size:14px;color:var(--error);border:1px solid currentColor;border-radius:8px}
+[role=alert]:empty{display:none}
+details{margin-top:24px;padding-top:20px;border-top:1px solid var(--line)}
+summary{cursor:pointer;font-size:14px;font-weight:600}
+details form{margin-top:16px}
+`;
+const CSP = `default-src 'none'; style-src 'sha256-${createHash('sha256').update(STYLE).digest('base64')}'; form-action 'self'; frame-ancestors 'none'`;
+const page = (response, status, message = '', signup = false) =>
   response
     .writeHead(status, {
       'Content-Type': 'text/html; charset=utf-8',
-      'Content-Security-Policy': "default-src 'none'; form-action 'self'; frame-ancestors 'none'",
+      'Content-Security-Policy': CSP,
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'no-referrer',
       'Cache-Control': 'no-store',
     })
-    .end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nod sign in</title>
-<main><h1>Nod</h1><p role="alert">${message}</p>
-<form method="post" action="/_auth/login"><h2>Sign in</h2>
-<p><label>Username <input name="username" autocomplete="username" required></label></p>
-<p><label>Password <input name="password" type="password" autocomplete="current-password" required></label></p>
-<p><button>Sign in</button></p></form>
-<form method="post" action="/_auth/signup"><h2>First time? Create your password</h2>
-<p><label>Username <input name="username" autocomplete="username" required></label></p>
-<p><label>Invite code <input name="invite" autocomplete="off" required></label></p>
-<p><label>New password (12 or more characters) <input name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label></p>
-<p><button>Create account</button></p></form></main></html>`);
+    .end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nod sign in</title><style>${STYLE}</style>
+<main><h1>Nod</h1><h2>Sign in to your assistant</h2><p role="alert">${message}</p>
+<form method="post" action="/_auth/login">
+<label>Username <input name="username" autocomplete="username" autocapitalize="none" required${signup ? '' : ' autofocus'}></label>
+<label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+<button>Sign in</button></form>
+<details${signup ? ' open' : ''}><summary>First time? Create your password</summary>
+<form method="post" action="/_auth/signup">
+<label>Username <input name="username" autocomplete="username" autocapitalize="none" required></label>
+<label>Invite code <input name="invite" autocomplete="off" required></label>
+<label>New password (12 or more characters) <input name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
+<button>Create account</button></form></details></main></html>`);
 
 const cookie = (value, maxAge) =>
   `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${origin.startsWith('https:') ? '; Secure' : ''}`;
@@ -169,7 +199,7 @@ async function auth(request, response, path) {
     const target = instance(username);
     const stored = target && same(invite, target.token) && sized && !accounts.has(username) && (await serial(() => hash(password)));
     if (!stored || accounts.has(username))
-      return page(response, 400, 'Could not create the account. Check the username and invite code, and use a password of 12 to 128 characters.');
+      return page(response, 400, 'Could not create the account. Check the username and invite code, and use a password of 12 to 128 characters.', true);
     accounts.set(username, stored);
     saveAccounts();
     return enter(response, username);
