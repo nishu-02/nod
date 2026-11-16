@@ -146,7 +146,9 @@ summary{cursor:pointer;font-size:14px;font-weight:600}
 details form{margin-top:16px}
 `;
 const CSP = `default-src 'none'; style-src 'sha256-${createHash('sha256').update(STYLE).digest('base64')}'; form-action 'self'; frame-ancestors 'none'`;
-const page = (response, status, message = '', signup = false) =>
+// Where to land after signing in; the strict charset blocks open redirects and makes it safe to embed in the form.
+const safe = (next) => (/^\/(?!\/)[\w\-./?=&%]*$/.test(next ?? '') ? next : '/');
+const page = (response, status, message = '', signup = false, next = '/') =>
   response
     .writeHead(status, {
       'Content-Type': 'text/html; charset=utf-8',
@@ -157,12 +159,12 @@ const page = (response, status, message = '', signup = false) =>
     })
     .end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nod sign in</title><style>${STYLE}</style>
 <main><h1>Nod</h1><h2>Sign in to your assistant</h2><p role="alert">${message}</p>
-<form method="post" action="/_auth/login">
+<form method="post" action="/_auth/login"><input type="hidden" name="next" value="${safe(next)}">
 <label>Username <input name="username" autocomplete="username" autocapitalize="none" required${signup ? '' : ' autofocus'}></label>
 <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
 <button>Sign in</button></form>
 <details${signup ? ' open' : ''}><summary>First time? Create your password</summary>
-<form method="post" action="/_auth/signup">
+<form method="post" action="/_auth/signup"><input type="hidden" name="next" value="${safe(next)}">
 <label>Username <input name="username" autocomplete="username" autocapitalize="none" required></label>
 <label>Invite code <input name="invite" autocomplete="off" required></label>
 <label>New password (12 or more characters) <input name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
@@ -170,10 +172,10 @@ const page = (response, status, message = '', signup = false) =>
 
 const cookie = (value, maxAge) =>
   `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${origin.startsWith('https:') ? '; Secure' : ''}`;
-const enter = (response, user) =>
+const enter = (response, user, next) =>
   response
     .writeHead(303, {
-      Location: '/',
+      Location: safe(next),
       'Set-Cookie': cookie(sign({ sub: user, exp: Math.floor(Date.now() / 1000) + TTL }), TTL),
     })
     .end();
@@ -188,38 +190,38 @@ async function form(request) {
 }
 
 async function auth(request, response, path) {
-  if (request.method === 'GET' && path === '/_auth/login') return page(response, 200);
+  if (request.method === 'GET' && path === '/_auth/login') return page(response, 200, '', false, new URLSearchParams(request.url.split('?')[1]).get('next'));
   if (request.method !== 'POST') return response.writeHead(404).end();
   if (request.headers.origin && request.headers.origin !== origin) return response.writeHead(403).end();
   if (path === '/_auth/logout') return response.writeHead(303, { Location: '/_auth/login', 'Set-Cookie': cookie('', 0) }).end();
-  const { username = '', password = '', invite = '' } = await form(request);
+  const { username = '', password = '', invite = '', next } = await form(request);
   const sized = password.length >= 12 && password.length <= 128;
   if (path === '/_auth/signup') {
     // The invite code is that user's NOD_AUTH_TOKEN, handed over by the admin; only provisioned users can sign up.
     const target = instance(username);
     const stored = target && same(invite, target.token) && sized && !accounts.has(username) && (await serial(() => hash(password)));
     if (!stored || accounts.has(username))
-      return page(response, 400, 'Could not create the account. Check the username and invite code, and use a password of 12 to 128 characters.', true);
+      return page(response, 400, 'Could not create the account. Check the username and invite code, and use a password of 12 to 128 characters.', true, next);
     accounts.set(username, stored);
     saveAccounts();
-    return enter(response, username);
+    return enter(response, username, next);
   }
   if (path === '/_auth/login') {
     const failed = fails.get(username);
     if (failed?.count >= LOCK_AFTER && Date.now() < failed.until)
-      return page(response, 429, 'Too many attempts. Try again in 15 minutes.');
+      return page(response, 429, 'Too many attempts. Try again in 15 minutes.', false, next);
     const stored = accounts.get(username);
     // Unknown users still cost one argon2 run, so timing does not reveal which usernames exist.
     const ok = password.length <= 128 && (await serial(() => verify(password, stored ?? DUMMY))) && !!stored;
     if (ok) {
       fails.delete(username);
-      return enter(response, username);
+      return enter(response, username, next);
     }
     if (stored) {
       const count = failed && Date.now() < failed.until ? failed.count + 1 : 1;
       fails.set(username, { count, until: Date.now() + LOCK_MS });
     }
-    return page(response, 401, 'Wrong username or password.');
+    return page(response, 401, 'Wrong username or password.', false, next);
   }
   response.writeHead(404).end();
 }
@@ -234,7 +236,7 @@ const server = http.createServer(async (request, response) => {
     const target = session(request);
     if (!target)
       return request.method === 'GET' && request.headers['sec-fetch-dest'] === 'document'
-        ? response.writeHead(303, { Location: '/_auth/login' }).end()
+        ? response.writeHead(303, { Location: `/_auth/login?next=${encodeURIComponent(request.url)}` }).end()
         : response.writeHead(401).end('Sign in first.');
     const upstream = http.request(
       { host: '127.0.0.1', port: target.port, method: request.method, path: request.url, headers: forwarded(request, target) },
