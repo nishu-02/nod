@@ -210,14 +210,23 @@ async function auth(request, response, path) {
     return response.writeHead(403, { 'Content-Type': 'text/plain' }).end('Cross-site form posts are not permitted. Reload the sign-in page and try again.');
   }
   if (path === '/_auth/logout') return response.writeHead(303, { Location: '/_auth/login', 'Set-Cookie': cookie('', 0) }).end();
-  const { username = '', password = '', invite = '', next } = await form(request);
+  const fields = await form(request);
+  // Pasted tokens pick up stray spaces and phones capitalise the first letter; neither should fail a sign-in.
+  const username = (fields.username ?? '').trim().toLowerCase();
+  const invite = (fields.invite ?? '').trim();
+  const { password = '', next } = fields;
   const sized = password.length >= 12 && password.length <= 128;
   if (path === '/_auth/signup') {
     // The invite code is that user's NOD_AUTH_TOKEN, handed over by the admin; only provisioned users can sign up.
     const target = instance(username);
-    const stored = target && same(invite, target.token) && sized && !accounts.has(username) && (await serial(() => hash(password)));
-    if (!stored || accounts.has(username))
-      return page(response, 400, 'Could not create the account. Check the username and invite code, and use a password of 12 to 128 characters.', true, next);
+    const invited = !!target && same(invite, target.token);
+    // Specific reasons are shown only to someone holding the right invite code.
+    if (!invited) return page(response, 400, 'That username and invite code do not match. Check both and try again.', true, next);
+    if (accounts.has(username))
+      return page(response, 400, 'This account already has a password. Sign in above, or ask your admin to reset it.', false, next);
+    if (!sized) return page(response, 400, 'Use a password of 12 to 128 characters.', true, next);
+    const stored = await serial(() => hash(password));
+    if (accounts.has(username)) return page(response, 400, 'This account already has a password. Sign in above.', false, next);
     accounts.set(username, stored);
     saveAccounts();
     return enter(response, username, next);
