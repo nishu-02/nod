@@ -14,3 +14,4 @@ dist/
 *.log
 coverage/
 .astro/
+deployment/self-host/users/
