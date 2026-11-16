@@ -1,0 +1,4 @@
+services:
+  runtime:
+    # SELinux (Fedora) blocks container_t from the Docker socket and the home-labelled proxy script
+    security_opt: [label:disable]

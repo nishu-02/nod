@@ -22,4 +22,4 @@ if [ ! -e "$env" ]; then
   } > "$env"
   echo "Created $env on port $port." >&2
 fi
-NOD_ENV_FILE=$env exec docker compose --file compose.yaml --env-file "$env" "$@"
+NOD_ENV_FILE=$env exec docker compose --file compose.yaml --file compose.selinux.yaml --env-file "$env" "$@"
