@@ -154,7 +154,8 @@ const page = (response, status, message = '', signup = false, next = '/') =>
       'Content-Type': 'text/html; charset=utf-8',
       'Content-Security-Policy': CSP,
       'X-Content-Type-Options': 'nosniff',
-      'Referrer-Policy': 'no-referrer',
+      // Not no-referrer: that makes browsers send "Origin: null" on the form POST, which the origin check rejects
+      'Referrer-Policy': 'same-origin',
       'Cache-Control': 'no-store',
     })
     .end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nod sign in</title><style>${STYLE}</style>
